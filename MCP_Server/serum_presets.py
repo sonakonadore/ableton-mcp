@@ -19,6 +19,7 @@ from .serum_state import (
     decode_state, encode_state, initial_state, preserve_preset_active_clips, preset_active_clips,
     read_limited, read_saved_state, run_host, save_state,
 )
+from .vst3_preset import component_preset
 
 EXTENSION = ".SerumPreset"
 FILE_ONLY = {"fileType", "presetName", "presetAuthor", "presetComment", "presetDescription", "tags"}
@@ -108,10 +109,7 @@ def live_preset_directory() -> Path:
 
 
 def vst3_preset(variant: Variant, processor: bytes) -> bytes:
-    header_size = 48
-    header = struct.pack("<4si32sq", b"VST3", 1, VST3_CLASS_IDS[variant], header_size + len(processor))
-    chunk_list = struct.pack("<4si4sqq", b"List", 1, b"Comp", header_size, len(processor))
-    return header + processor + chunk_list
+    return component_preset(VST3_CLASS_IDS[variant], processor)
 
 
 def _vst3_processor(raw: bytes, variant: Variant) -> bytes:

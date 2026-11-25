@@ -314,14 +314,16 @@ bool inputState(ProbeStream &stream, const char *path) {
 int main(int argc, char **argv) {
     if (argc < 6 || (std::strcmp(argv[2], "instrument") && std::strcmp(argv[2], "fx"))) {
         std::fprintf(stderr, "usage: serum_host PLUGIN_BUNDLE instrument|fx INPUT_STATE|- OUTPUT_STATE OUTPUT_F32LE|- "
-            "[--wait-for-samples] [--audition EVENTS] [--audio-input STEREO_F32LE]\n");
+            "[--class-name VST3_CLASS] [--wait-for-samples] [--audition EVENTS] [--audio-input STEREO_F32LE]\n");
         return 1;
     }
     const bool effect = !std::strcmp(argv[2], "fx");
     const char *eventsPath = nullptr, *audioPath = nullptr;
+    const char *className = nullptr;
     bool waitForSamples = false;
     for (int index = 6; index < argc; ++index) {
         if (!std::strcmp(argv[index], "--wait-for-samples") && !waitForSamples) waitForSamples = true;
+        else if (!std::strcmp(argv[index], "--class-name") && !className && index + 1 < argc) className = argv[++index];
         else if (!std::strcmp(argv[index], "--audition") && !eventsPath && index + 1 < argc) eventsPath = argv[++index];
         else if (!std::strcmp(argv[index], "--audio-input") && !audioPath && index + 1 < argc) audioPath = argv[++index];
         else { std::fputs("Invalid serum_host option.\n", stderr); return 1; }
@@ -347,7 +349,7 @@ int main(int argc, char **argv) {
 
     ProbeHost host;
     IComponent *component = nullptr;
-    const char *name = effect ? "Serum 2 FX" : "Serum 2";
+    const char *name = className ? className : (effect ? "Serum 2 FX" : "Serum 2");
     for (int32 index = 0; index < factory->countClasses(); ++index) {
         PClassInfo item{};
         if (factory->getClassInfo(index, &item) != kResultOk || std::strcmp(item.name, name)

@@ -194,6 +194,14 @@ To ask an MCP assistant for a sound in your own words, see
 Use them to inspect settings, choose installed assets, and verify a batch of
 changes before making the next edit.
 
+### Use Omnisphere
+
+Use `list_omnisphere_plugins` to find Omnisphere in Live and
+`list_omnisphere_patches` to search installed Factory and User part patches.
+On macOS, `export_omnisphere_live_preset` places a selected patch in Part 1
+of a verified VST3 preset. Use `load_omnisphere_plugin` to load it on an empty
+MIDI track. See [Omnisphere setup and compatibility](docs/omnisphere.md).
+
 ### ChatGPT web via Secure MCP Tunnel
 
 Run the HTTP server in a terminal and leave it open:

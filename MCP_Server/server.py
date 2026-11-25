@@ -13,11 +13,13 @@ import threading
 from dataclasses import dataclass, field
 from contextlib import asynccontextmanager
 from typing import Annotated, AsyncIterator, Dict, Any, List, Literal, Union
+from xml.etree.ElementTree import ParseError
 
 from .telemetry import record_startup
 from .telemetry_decorator import telemetry_tool, rich_telemetry_tool
 from .dataset import dataset_enabled, get_recorder
 from .dataset.trajectory_decorator import trajectory_tool
+from . import omnisphere
 from .serum_controls import (
     FX_MODULES, MISSING, RACKS, Mode, SerumEdits, StatePath, describe, edit_state, list_assets, native_default, value_at,
 )
@@ -1038,6 +1040,108 @@ SERUM_BROWSER_PATHS = {
     "vst3": "plugins/VST3/Xfer Records",
     "au": "plugins/AUv2/Xfer Records",
 }
+
+
+@mcp.tool(annotations=READ_ONLY)
+def list_omnisphere_plugins() -> dict[str, list[dict[str, str]]]:
+    """List the loadable Omnisphere VST3 and Audio Units entries in Live."""
+    ableton = get_ableton_connection()
+    try:
+        return {"plugins": [
+            item
+            for plugin_format in omnisphere.BROWSER_PATHS
+            for item in omnisphere.browser_plugins(ableton, plugin_format)
+        ]}
+    except omnisphere.OmnisphereError as exc:
+        raise ToolError(str(exc)) from exc
+
+
+@mcp.tool(annotations=READ_ONLY)
+def list_omnisphere_patches(
+    query: Annotated[str, Field(max_length=200)] = "",
+    source: Literal["all", "factory", "user"] = "all",
+    limit: Annotated[int, Field(ge=1, le=200)] = 30,
+) -> dict[str, Any]:
+    """Search installed Omnisphere part patches by name, library or category.
+
+    Pass a returned patch id to export_omnisphere_live_preset. This searches
+    the libraries on the computer running the MCP server.
+    """
+    try:
+        return omnisphere.list_patches(omnisphere.patch_directory(), query, source, limit)
+    except (omnisphere.OmnisphereError, OSError) as exc:
+        raise ToolError(str(exc)) from exc
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False))
+def export_omnisphere_live_preset(
+    patch_id: Annotated[str, Field(min_length=1, max_length=512)],
+    name: Annotated[str, Field(min_length=1, max_length=96)],
+) -> dict[str, str]:
+    """Export a verified Omnisphere Part 1 patch as a VST3 preset in Live's User Library.
+
+    Use a patch id from list_omnisphere_patches and a new preset name. Requires
+    Omnisphere VST3 and the macOS host probe. Call load_omnisphere_plugin with
+    preset_name after Live indexes the export.
+    """
+    try:
+        return omnisphere.export_live_preset(patch_id, name)
+    except (omnisphere.OmnisphereError, OSError, ParseError) as exc:
+        raise ToolError(str(exc)) from exc
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False))
+def load_omnisphere_plugin(
+    track_index: TrackIndex,
+    plugin_format: omnisphere.OmnisphereFormat = "auto",
+    preset_name: Annotated[str, Field(min_length=1, max_length=96)] | None = None,
+) -> dict[str, Any]:
+    """Load Omnisphere on an empty Live MIDI track, optionally with an exported patch.
+
+    Auto prefers VST3 and falls back to AU for the unconfigured instrument.
+    An exported preset requires VST3. Check get_track_info after a request
+    before retrying.
+    """
+    ableton = get_ableton_connection()
+    track = ableton.send_command("get_track_info", {"track_index": track_index})
+    if not track.get("is_midi_track") or track.get("devices"):
+        raise ToolError("Select an empty MIDI track for Omnisphere.")
+    try:
+        if preset_name is not None:
+            if plugin_format == "au":
+                raise ToolError("Exported Omnisphere presets require VST3.")
+            filename = omnisphere.preset_filename(preset_name)
+            browser = ableton.send_command("get_browser_items_at_path", {"path": omnisphere.LIVE_PRESET_BROWSER})
+            candidates = [
+                {"name": omnisphere.NAME, "format": "vst3", "uri": item["uri"]}
+                for item in browser.get("items", [])
+                if item.get("name") == filename and item.get("is_loadable")
+                and isinstance(item.get("uri"), str) and item["uri"].strip()
+            ]
+            if len(candidates) != 1:
+                raise ToolError(f"Live has not indexed exactly one loadable {filename!r} in {omnisphere.LIVE_PRESET_FOLDER}.")
+        else:
+            formats = omnisphere.BROWSER_PATHS if plugin_format == "auto" else (plugin_format,)
+            candidates = []
+            for candidate_format in formats:
+                candidates = omnisphere.browser_plugins(ableton, candidate_format)
+                if candidates:
+                    break
+            if not candidates:
+                raise ToolError(f"Omnisphere is unavailable in Live for format {plugin_format!r}.")
+            if len(candidates) != 1:
+                raise ToolError("Live reports multiple matching Omnisphere plug-ins.")
+    except omnisphere.OmnisphereError as exc:
+        raise ToolError(str(exc)) from exc
+
+    plugin = candidates[0]
+    try:
+        result = ableton.send_command("load_browser_item", {"track_index": track_index, "item_uri": plugin["uri"]})
+    except Exception as exc:
+        raise ToolError(f"Could not confirm the Omnisphere load request. Check the device chain before retrying. {exc}") from exc
+    if result.get("loaded") is not True:
+        raise ToolError("Live did not acknowledge the Omnisphere load request.")
+    return {**plugin, "track_index": track_index, "preset_name": preset_name, "status": "load_requested"}
 
 
 @mcp.prompt(title="Design a Serum sound", description="Turn a natural-language sound brief into a rendered Serum preset.")
